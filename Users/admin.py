@@ -10,8 +10,8 @@ class UserAdmin(BaseUserAdmin):
     Custom admin interface for User model
     """
     list_display = [
-        'username', 'email', 'first_name', 'last_name',
-        'is_verified', 'consensus_score', 'learning_level',
+        'finova_id', 'username', 'email', 'first_name', 'last_name',
+        'is_verified', 'user_level', 'consensus_score', 'learning_level',
         'is_staff', 'created_at'
     ]
     
@@ -20,18 +20,18 @@ class UserAdmin(BaseUserAdmin):
         'gender_identity', 'learning_level', 'created_at'
     ]
     
-    search_fields = ['username', 'email', 'first_name', 'last_name']
+    search_fields = ['username', 'email', 'first_name', 'last_name', 'finova_id']
     
     ordering = ['-created_at']
     
     readonly_fields = [
-        'id', 'created_at', 'updated_at', 'last_login',
+        'id', 'finova_id', 'created_at', 'updated_at', 'last_login',
         'total_reels_watched', 'total_votes_cast'
     ]
     
     fieldsets = (
         (None, {
-            'fields': ('id', 'email', 'username', 'password')
+            'fields': ('id', 'finova_id', 'email', 'username', 'password')
         }),
         (_('Personal Info'), {
             'fields': (

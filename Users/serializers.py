@@ -30,7 +30,7 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
             'first_name', 'last_name', 'date_of_birth', 'gender_identity',
             'gender_identity_custom', 'bio'
         ]
-        read_only_fields = ['id']
+        read_only_fields = ['id', 'finova_id']
     
     def validate(self, attrs):
         if attrs['password'] != attrs['password_confirm']:
@@ -74,7 +74,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = [
-            'id', 'email', 'username', 'first_name', 'last_name',
+            'id', 'finova_id', 'email', 'username', 'first_name', 'last_name',
             'full_name', 'date_of_birth', 'age', 'gender_identity',
             'gender_identity_custom', 'display_gender', 'profile_picture',
             'bio', 'is_verified', 'phone_number', 'consensus_score',
@@ -101,7 +101,7 @@ class UserPublicSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = [
-            'id', 'username', 'full_name', 'profile_picture',
+            'id', 'finova_id', 'username', 'full_name', 'profile_picture',
             'bio', 'consensus_score', 'learning_level', 'user_level',
             'is_verified', 'created_at'
         ]

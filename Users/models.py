@@ -1,9 +1,20 @@
 import uuid
+import string
+import random
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.utils.translation import gettext_lazy as _
 from .managers import CustomUserManager
+
+
+def generate_finova_id():
+    """Generate a unique 6-character alphanumeric Finova ID (e.g. FHW397)"""
+    chars = string.ascii_uppercase + string.digits
+    while True:
+        fid = ''.join(random.choices(chars, k=6))
+        if not User.objects.filter(finova_id=fid).exists():
+            return fid
 
 
 class User(AbstractUser):
@@ -33,6 +44,13 @@ class User(AbstractUser):
         default=uuid.uuid4, 
         editable=False,
         help_text="Unique user identifier"
+    )
+    
+    finova_id = models.CharField(
+        max_length=6,
+        unique=True,
+        editable=False,
+        help_text=_("Unique 6-char Finova ID (e.g. FHW397) for user lookup")
     )
     
     username = models.CharField(
@@ -162,12 +180,18 @@ class User(AbstractUser):
         indexes = [
             models.Index(fields=['email']),
             models.Index(fields=['username']),
+            models.Index(fields=['finova_id']),
             models.Index(fields=['is_verified']),
             models.Index(fields=['created_at']),
         ]
     
     def __str__(self):
-        return f"@{self.username} ({self.email})"
+        return f"@{self.username} [{self.finova_id}] ({self.email})"
+    
+    def save(self, *args, **kwargs):
+        if not self.finova_id:
+            self.finova_id = generate_finova_id()
+        super().save(*args, **kwargs)
     
     def get_full_name(self):
         """Return first_name + last_name with a space in between."""
