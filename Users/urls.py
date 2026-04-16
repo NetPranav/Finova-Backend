@@ -1,15 +1,13 @@
-from django.urls import include, path
-from rest_framework import routers
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
+from .views import UserViewSet, UserRegistrationView
 
-from Users import views
+router = DefaultRouter()
+router.register(r'', UserViewSet, basename='user')
 
-router = routers.DefaultRouter()
-router.register(r"users", views.UserViewSet)
-router.register(r"groups", views.GroupViewSet)
+app_name = 'users'
 
-# Wire up our API using automatic URL routing.
-# Additionally, we include login URLs for the browsable API.
 urlpatterns = [
-    path("", include(router.urls)),
-    path("api-auth/", include("rest_framework.urls", namespace="rest_framework")),
+    path('register/', UserRegistrationView.as_view(), name='register'),
+    path('', include(router.urls)),
 ]
