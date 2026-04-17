@@ -76,6 +76,16 @@ class Group(models.Model):
         help_text=_("User who created this group")
     )
 
+    requires_approval = models.BooleanField(
+        default=False,
+        help_text=_("If True, users must send a join request to be approved by admins.")
+    )
+
+    minimum_trust_score = models.IntegerField(
+        default=0,
+        help_text=_("Minimum consensus_score required to join or send a join request.")
+    )
+
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -152,6 +162,123 @@ class GroupMember(models.Model):
 
     def __str__(self):
         return f"{self.user.username} in {self.group.name} ({self.role})"
+
+
+class JoinRequest(models.Model):
+    """
+    Tracks requests by users to join a group that requires approval.
+    """
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    
+    group = models.ForeignKey(
+        Group,
+        on_delete=models.CASCADE,
+        related_name='join_requests'
+    )
+    
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='group_join_requests'
+    )
+    
+    status = models.CharField(
+        max_length=10, 
+        choices=STATUS_CHOICES, 
+        default='pending'
+    )
+    
+    message = models.TextField(
+        max_length=500,
+        blank=True, 
+        help_text=_("Optional message to the group admins")
+    )
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = _('join request')
+        verbose_name_plural = _('join requests')
+        unique_together = ['group', 'user']
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.user.username} -> {self.group.name} ({self.status})"
+
+
+class GroupWallet(models.Model):
+    """
+    Capital Pool linked to the Group.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    group = models.OneToOneField(
+        Group,
+        on_delete=models.CASCADE,
+        related_name='wallet'
+    )
+    current_balance = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0.00,
+        validators=[MinValueValidator(0)]
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = _('group wallet')
+        verbose_name_plural = _('group wallets')
+
+    def __str__(self):
+        return f"{self.group.name} Pool: {self.current_balance}"
+
+
+class WalletTransaction(models.Model):
+    """
+    Secure ledger preventing race conditions.
+    """
+    TRANSACTION_TYPES = [
+        ('deposit', 'Deposit'),
+        ('withdraw', 'Withdraw'),
+        ('locked', 'Locked for Trade'),
+        ('refund', 'Refunded'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    wallet = models.ForeignKey(
+        GroupWallet,
+        on_delete=models.CASCADE,
+        related_name='transactions'
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='wallet_transactions'
+    )
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    transaction_type = models.CharField(max_length=20, choices=TRANSACTION_TYPES)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    reference_id = models.CharField(
+        max_length=100, 
+        blank=True, 
+        null=True, 
+        help_text=_("Related ID (e.g. Poll/Discussion ID)")
+    )
+
+    class Meta:
+        verbose_name = _('wallet transaction')
+        verbose_name_plural = _('wallet transactions')
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.get_transaction_type_display()} of {self.amount} by {self.user.username}"
 
 
 class GroupMessage(models.Model):
@@ -247,10 +374,12 @@ class Discussion(models.Model):
 
     STATUS_CHOICES = [
         ('open', 'Open for Discussion'),
+        ('pooling', 'Waiting for Capital Funding'),
         ('voting', 'Voting in Progress'),
         ('executed', 'Trade Executed'),
         ('expired', 'Expired'),
         ('rejected', 'Rejected by Vote'),
+        ('cancelled', 'Cancelled (Underfunded/Expired)'),
     ]
 
     DISCUSSION_TYPE_CHOICES = [
@@ -309,6 +438,19 @@ class Discussion(models.Model):
     engagement_count = models.PositiveIntegerField(
         default=0,
         help_text=_("Current number of comments on this discussion")
+    )
+    
+    required_capital = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0.00,
+        help_text=_("Amount of pooled capital required to execute this trade")
+    )
+
+    expires_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text=_("When the POOLING or VOTING phase auto-cancels if underfunded")
     )
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -485,7 +627,7 @@ class TradePoll(models.Model):
             now = timezone.now()
             remaining = self.voting_deadline - now
             if remaining.total_seconds() > 0:
-                reduced_seconds = remaining.total_seconds() * 0.1  # Keep only 10%
+                reduced_seconds = remaining.total_seconds() * 0.05  # Keep only 5% (reduce by 95%)
                 self.reduced_deadline = now + timezone.timedelta(seconds=reduced_seconds)
                 self.voting_deadline = self.reduced_deadline
                 self.turbo_reduction_applied = True

@@ -1,6 +1,13 @@
 from django.db.models.signals import post_save
 from django.dispatch import receiver
-from .models import GroupMember, GroupMessage, Vote
+from .models import GroupMember, GroupMessage, Vote, Group, GroupWallet
+
+
+@receiver(post_save, sender=Group)
+def create_group_wallet(sender, instance, created, **kwargs):
+    """Auto-create a capital pool wallet when a group is formed."""
+    if created:
+        GroupWallet.objects.create(group=instance)
 
 
 @receiver(post_save, sender=GroupMember)

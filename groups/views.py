@@ -5,9 +5,10 @@ from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
+from django.db.models import Count, Q
 from .models import (
-    Group, GroupMember, GroupMessage,
-    Discussion, DiscussionComment, TradePoll, Vote,
+    Group, GroupMember, GroupMessage, GroupWallet, WalletTransaction,
+    Discussion, DiscussionComment, TradePoll, Vote, JoinRequest
 )
 from .serializers import (
     GroupCreateSerializer, GroupListSerializer, GroupDetailSerializer,
@@ -16,6 +17,7 @@ from .serializers import (
     DiscussionSerializer, DiscussionCreateSerializer,
     DiscussionCommentSerializer,
     TradePollSerializer, VoteCreateSerializer, VoteSerializer,
+    JoinRequestSerializer
 )
 from .permissions import IsGroupMember, IsGroupAdmin
 
@@ -87,12 +89,28 @@ class GroupViewSet(viewsets.ModelViewSet):
         instance.is_active = False
         instance.save(update_fields=['is_active'])
 
+    @action(detail=False, methods=['get'])
+    def garden(self, request):
+        """List top performing groups for the Garden section."""
+        groups = self.get_queryset().annotate(
+            num_members=Count('members', filter=Q(members__is_active=True))
+        ).order_by('-num_members', '-wallet__current_balance')[:20]
+        serializer = GroupListSerializer(groups, many=True)
+        return Response(serializer.data)
+
     # ── Join / Leave ──
 
     @action(detail=True, methods=['post'])
     def join(self, request, finova_id=None):
-        """Join a group by its Finova ID."""
+        """Join a group or send a join request by its Finova ID."""
         group = self.get_object()
+
+        # Check minimum trust score
+        if request.user.consensus_score < group.minimum_trust_score:
+            return Response(
+                {"error": f"Requires a trust score of at least {group.minimum_trust_score}."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
         if group.is_full:
             return Response(
@@ -100,6 +118,28 @@ class GroupViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Handle closed groups (Requires Join Request)
+        if group.requires_approval:
+            # Check if request already exists
+            existing_request = group.join_requests.filter(user=request.user).first()
+            if existing_request:
+                if existing_request.status == 'pending':
+                    return Response({"message": "You already have a pending request."}, status=status.HTTP_200_OK)
+                elif existing_request.status == 'approved':
+                    pass # Continue to join if somehow it's approved but user left
+                elif existing_request.status == 'rejected':
+                    return Response({"error": "Your join request was previously rejected."}, status=status.HTTP_403_FORBIDDEN)
+            
+            # If not previously requested or trying again
+            if not existing_request or existing_request.status != 'approved':
+                message = request.data.get('message', '').strip()
+                JoinRequest.objects.create(group=group, user=request.user, message=message[:500])
+                return Response(
+                    {"message": "Join request sent. Awaiting admin approval.", "group_finova_id": group.finova_id},
+                    status=status.HTTP_202_ACCEPTED,
+                )
+
+        # Standard direct join or completing an approved request
         membership, created = GroupMember.objects.get_or_create(
             group=group, user=request.user,
             defaults={'role': 'member'},
@@ -157,6 +197,69 @@ class GroupViewSet(viewsets.ModelViewSet):
         members = group.members.filter(is_active=True).select_related('user')
         serializer = GroupMemberSerializer(members, many=True)
         return Response(serializer.data)
+
+    # ── Admin Join Requests ──
+
+    @action(detail=True, methods=['get'])
+    def requests(self, request, finova_id=None):
+        """List pending join requests. Admins only."""
+        group = self.get_object()
+        admin_membership = group.members.filter(user=request.user, role='admin', is_active=True).first()
+        if not admin_membership:
+            return Response({"error": "Admin access required."}, status=status.HTTP_403_FORBIDDEN)
+            
+        join_requests = group.join_requests.filter(status='pending').select_related('user')
+        serializer = JoinRequestSerializer(join_requests, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'], url_path='approve-request')
+    def approve_request(self, request, finova_id=None):
+        """Approve a join request."""
+        group = self.get_object()
+        admin_membership = group.members.filter(user=request.user, role='admin', is_active=True).first()
+        if not admin_membership:
+            return Response({"error": "Admin access required."}, status=status.HTTP_403_FORBIDDEN)
+            
+        user_finova_id = request.data.get('user_finova_id')
+        join_request = group.join_requests.filter(status='pending', user__finova_id=user_finova_id).first()
+        
+        if not join_request:
+            return Response({"error": "Pending request not found."}, status=status.HTTP_404_NOT_FOUND)
+            
+        if group.is_full:
+            return Response({"error": "Group is full."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        join_request.status = 'approved'
+        join_request.save(update_fields=['status'])
+        
+        membership, created = GroupMember.objects.get_or_create(
+            group=group, user=join_request.user,
+            defaults={'role': 'member'}
+        )
+        if not created and not membership.is_active:
+            membership.is_active = True
+            membership.save(update_fields=['is_active'])
+            
+        return Response({"message": f"Approved {join_request.user.username} to join {group.name}."})
+
+    @action(detail=True, methods=['post'], url_path='reject-request')
+    def reject_request(self, request, finova_id=None):
+        """Reject a join request."""
+        group = self.get_object()
+        admin_membership = group.members.filter(user=request.user, role='admin', is_active=True).first()
+        if not admin_membership:
+            return Response({"error": "Admin access required."}, status=status.HTTP_403_FORBIDDEN)
+            
+        user_finova_id = request.data.get('user_finova_id')
+        join_request = group.join_requests.filter(status='pending', user__finova_id=user_finova_id).first()
+        
+        if not join_request:
+            return Response({"error": "Pending request not found."}, status=status.HTTP_404_NOT_FOUND)
+            
+        join_request.status = 'rejected'
+        join_request.save(update_fields=['status'])
+        
+        return Response({"message": f"Rejected {join_request.user.username}'s request."})
 
     @action(detail=True, methods=['patch'], url_path='promote')
     def promote(self, request, finova_id=None):
@@ -241,6 +344,100 @@ class GroupViewSet(viewsets.ModelViewSet):
 
         return Response({"message": f"{target_user.username} has been removed from {group.name}."})
 
+    # ── Wallet Management ──
+
+    @action(detail=True, methods=['get'])
+    def wallet(self, request, finova_id=None):
+        """Retrieve the group's pooled capital balance."""
+        group = self.get_object()
+        from .serializers import GroupWalletSerializer
+        serializer = GroupWalletSerializer(group.wallet)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'])
+    def deposit(self, request, finova_id=None):
+        """Atomically deposit funds from user's individual capital to group pool."""
+        group = self.get_object()
+        user = request.user
+        amount = request.data.get('amount')
+        
+        from decimal import Decimal, InvalidOperation
+        try:
+            amount = Decimal(str(amount))
+            if amount <= 0:
+                raise ValueError
+        except (TypeError, ValueError, InvalidOperation):
+            return Response({"error": "Invalid amount."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        from django.db import transaction
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        
+        with transaction.atomic():
+            locked_user = User.objects.select_for_update().get(id=user.id)
+            locked_wallet = GroupWallet.objects.select_for_update().get(group=group)
+            
+            if locked_user.individual_virtual_capital < amount:
+                return Response({"error": "Insufficient individual capital."}, status=status.HTTP_400_BAD_REQUEST)
+                
+            locked_user.individual_virtual_capital -= amount
+            locked_user.save(update_fields=['individual_virtual_capital'])
+            
+            locked_wallet.current_balance += amount
+            locked_wallet.save(update_fields=['current_balance'])
+            
+            WalletTransaction.objects.create(
+                wallet=locked_wallet, user=locked_user, amount=amount, transaction_type='deposit'
+            )
+            
+        return Response({
+            "message": f"Successfully deposited {amount}.", 
+            "new_pool_balance": locked_wallet.current_balance,
+            "your_remaining_capital": locked_user.individual_virtual_capital
+        })
+
+    @action(detail=True, methods=['post'])
+    def withdraw(self, request, finova_id=None):
+        """Atomically withdraw funds from group pool back to user's individual capital."""
+        group = self.get_object()
+        user = request.user
+        amount = request.data.get('amount')
+        
+        from decimal import Decimal, InvalidOperation
+        try:
+            amount = Decimal(str(amount))
+            if amount <= 0:
+                raise ValueError
+        except (TypeError, ValueError, InvalidOperation):
+            return Response({"error": "Invalid amount."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        from django.db import transaction
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        
+        with transaction.atomic():
+            locked_user = User.objects.select_for_update().get(id=user.id)
+            locked_wallet = GroupWallet.objects.select_for_update().get(group=group)
+            
+            if locked_wallet.current_balance < amount:
+                return Response({"error": "Insufficient group pool funds."}, status=status.HTTP_400_BAD_REQUEST)
+                
+            locked_wallet.current_balance -= amount
+            locked_wallet.save(update_fields=['current_balance'])
+            
+            locked_user.individual_virtual_capital += amount
+            locked_user.save(update_fields=['individual_virtual_capital'])
+            
+            WalletTransaction.objects.create(
+                wallet=locked_wallet, user=locked_user, amount=amount, transaction_type='withdraw'
+            )
+            
+        return Response({
+            "message": f"Successfully withdrew {amount}.", 
+            "new_pool_balance": locked_wallet.current_balance,
+            "your_new_capital": locked_user.individual_virtual_capital
+        })
+
 
 # ──────────────────── Group Messages ────────────────────
 
@@ -310,6 +507,20 @@ class DiscussionViewSet(GroupLookupMixin, viewsets.ModelViewSet):
             return DiscussionCreateSerializer
         return DiscussionSerializer
 
+    def retrieve(self, request, *args, **kwargs):
+        """Override retrieve to inject requires_additional_funding flag."""
+        instance = self.get_object()
+        serializer = self.get_serializer(instance)
+        data = serializer.data
+        
+        # Funding validation logic
+        if instance.status == 'pooling' or (instance.status == 'open' and instance.group.wallet.current_balance < instance.required_capital):
+            data['requires_additional_funding'] = True
+        else:
+            data['requires_additional_funding'] = False
+            
+        return Response(data)
+
     def perform_create(self, serializer):
         group = self.get_group()
         serializer.save(group=group, proposed_by=self.request.user)
@@ -357,6 +568,35 @@ class DiscussionViewSet(GroupLookupMixin, viewsets.ModelViewSet):
             response_data['poll_id'] = str(poll.id)
 
         return Response(response_data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], url_path='direct-vote')
+    def direct_vote(self, request, group_finova_id=None, pk=None):
+        """
+        Bypass discussion and proceed to Voting or Pooling based on capital constraints.
+        If underfunded, sets expires_at.
+        """
+        discussion = self.get_object()
+        
+        if discussion.status != 'open':
+            return Response({"error": "Proposal is not open."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        wallet = discussion.group.wallet
+        if wallet.current_balance < discussion.required_capital:
+            discussion.status = 'pooling'
+            discussion.expires_at = timezone.now() + timezone.timedelta(hours=24)
+            discussion.save(update_fields=['status', 'expires_at'])
+            return Response({
+                "message": "Insufficient funds. Proposal moved to POOLING.",
+                "requires_additional_funding": True,
+                "expires_at": discussion.expires_at
+            })
+            
+        poll = discussion.unlock_voting()
+        return Response({
+            "message": "Funds sufficient. Voting unlocked.",
+            "requires_additional_funding": False,
+            "poll_id": str(poll.id) if poll else None
+        })
 
 
 # ──────────────────── Trade Polls & Voting ────────────────────

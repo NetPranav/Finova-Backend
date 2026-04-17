@@ -52,9 +52,12 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework.authtoken',  # or use JWT
     'corsheaders',
+    'django_apscheduler',
     
     # Local apps
     'users.apps.UsersConfig',
+    'groups.apps.GroupsConfig',
+    'chat.apps.ChatConfig',
 ]
 
 MIDDLEWARE = [
@@ -163,4 +166,6 @@ MEDIA_ROOT = BASE_DIR / 'media'
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",  # React/Next.js dev server
     "http://localhost:5173",  # Vite dev server
+    
 ]
+ALLOWED_HOSTS = ['192.168.0.106', 'localhost', '127.0.0.1']

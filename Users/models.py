@@ -119,6 +119,15 @@ class User(AbstractUser):
         help_text=_("Optional phone for 2FA")
     )
     
+    # Financial Information
+    individual_virtual_capital = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0.00,
+        validators=[MinValueValidator(0)],
+        help_text=_("Individual capital user can allocate to group pools")
+    )
+    
     # Gamification & Progress
     consensus_score = models.IntegerField(
         default=0,
@@ -189,8 +198,19 @@ class User(AbstractUser):
         return f"@{self.username} [{self.finova_id}] ({self.email})"
     
     def save(self, *args, **kwargs):
+        is_new = self.pk is None
         if not self.finova_id:
             self.finova_id = generate_finova_id()
+            
+        if is_new:
+            from decimal import Decimal
+            if self.gender_identity == 'woman':
+                self.individual_virtual_capital = Decimal('55000.00')
+            elif self.gender_identity == 'man':
+                self.individual_virtual_capital = Decimal('30000.00')
+            else:
+                self.individual_virtual_capital = Decimal('30000.00')
+                
         super().save(*args, **kwargs)
     
     def get_full_name(self):

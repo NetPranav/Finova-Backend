@@ -1,8 +1,8 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from .models import (
-    Group, GroupMember, GroupMessage,
-    Discussion, DiscussionComment, TradePoll, Vote
+    Group, GroupMember, GroupMessage, GroupWallet, WalletTransaction,
+    Discussion, DiscussionComment, TradePoll, Vote, JoinRequest
 )
 
 User = get_user_model()
@@ -16,17 +16,51 @@ class GroupMemberSerializer(serializers.ModelSerializer):
     finova_id = serializers.CharField(source='user.finova_id', read_only=True)
     profile_picture = serializers.ImageField(source='user.profile_picture', read_only=True)
     user_level = serializers.CharField(source='user.user_level', read_only=True)
+    consensus_score = serializers.IntegerField(source='user.consensus_score', read_only=True)
 
     class Meta:
         model = GroupMember
         fields = [
             'id', 'finova_id', 'username', 'profile_picture',
-            'user_level', 'role', 'is_active', 'joined_at',
+            'user_level', 'consensus_score', 'role', 'is_active', 'joined_at',
         ]
         read_only_fields = ['id', 'joined_at']
 
 
+class JoinRequestSerializer(serializers.ModelSerializer):
+    """Serializer for group join requests."""
+    username = serializers.CharField(source='user.username', read_only=True)
+    finova_id = serializers.CharField(source='user.finova_id', read_only=True)
+    profile_picture = serializers.ImageField(source='user.profile_picture', read_only=True)
+    user_level = serializers.CharField(source='user.user_level', read_only=True)
+    consensus_score = serializers.IntegerField(source='user.consensus_score', read_only=True)
+
+    class Meta:
+        model = JoinRequest
+        fields = [
+            'id', 'group', 'user', 'finova_id', 'username', 'profile_picture',
+            'user_level', 'consensus_score', 'status', 'message', 'created_at'
+        ]
+        read_only_fields = ['id', 'group', 'user', 'status', 'created_at']
+
+
 # ──────────────────────── Group Serializers ────────────────────────
+
+class WalletTransactionSerializer(serializers.ModelSerializer):
+    user_username = serializers.CharField(source='user.username', read_only=True)
+    
+    class Meta:
+        model = WalletTransaction
+        fields = ['id', 'user_username', 'amount', 'transaction_type', 'reference_id', 'created_at']
+
+
+class GroupWalletSerializer(serializers.ModelSerializer):
+    transactions = WalletTransactionSerializer(many=True, read_only=True)
+    
+    class Meta:
+        model = GroupWallet
+        fields = ['id', 'current_balance', 'updated_at', 'transactions']
+
 
 class GroupCreateSerializer(serializers.ModelSerializer):
     """Serializer for creating a new investment group."""
@@ -35,7 +69,7 @@ class GroupCreateSerializer(serializers.ModelSerializer):
         model = Group
         fields = [
             'name', 'description', 'guidelines', 'group_photo',
-            'risk_level', 'max_members',
+            'risk_level', 'max_members', 'requires_approval', 'minimum_trust_score',
         ]
 
     def validate_max_members(self, value):
@@ -63,6 +97,7 @@ class GroupListSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'finova_id', 'name', 'group_photo', 'risk_level',
             'member_count', 'max_members', 'created_by_username',
+            'requires_approval', 'minimum_trust_score',
             'is_active', 'created_at',
         ]
 
@@ -80,7 +115,7 @@ class GroupDetailSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'finova_id', 'name', 'description', 'guidelines',
             'group_photo', 'risk_level', 'max_members', 'member_count',
-            'is_full', 'members', 'created_by', 'created_by_username',
+            'is_full', 'requires_approval', 'minimum_trust_score', 'members', 'created_by', 'created_by_username',
             'created_by_finova_id', 'is_active', 'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'finova_id', 'created_by', 'created_at', 'updated_at']
@@ -93,7 +128,7 @@ class GroupUpdateSerializer(serializers.ModelSerializer):
         model = Group
         fields = [
             'name', 'description', 'guidelines', 'group_photo',
-            'risk_level', 'max_members',
+            'risk_level', 'max_members', 'requires_approval', 'minimum_trust_score',
         ]
 
 
@@ -150,6 +185,7 @@ class DiscussionCreateSerializer(serializers.ModelSerializer):
         model = Discussion
         fields = [
             'stock_symbol', 'stock_name', 'discussion_type', 'reasoning',
+            'required_capital'
         ]
 
 
@@ -167,13 +203,14 @@ class DiscussionSerializer(serializers.ModelSerializer):
             'id', 'group', 'proposed_by', 'proposed_by_username',
             'proposed_by_finova_id', 'stock_symbol', 'stock_name',
             'discussion_type', 'reasoning', 'status',
+            'required_capital', 'expires_at',
             'min_engagement_to_unlock_vote', 'engagement_count',
             'can_unlock_voting', 'has_poll', 'comments',
             'created_at', 'voting_unlocked_at',
         ]
         read_only_fields = [
             'id', 'group', 'proposed_by', 'status',
-            'engagement_count', 'created_at', 'voting_unlocked_at',
+            'engagement_count', 'created_at', 'voting_unlocked_at', 'expires_at'
         ]
 
     def get_has_poll(self, obj):
